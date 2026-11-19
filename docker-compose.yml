@@ -17,6 +17,22 @@ services:
       REPLY_DELAY: "0"
     networks: [telemetry]
 
+  quota:
+    build: ./quota
+    container_name: telemetry-quota
+    environment:
+      HTTP_PORT: "8081"
+      DB_PATH: /data/quota.db            # 保存版/待应用版持久化（重启保留并继续应用）
+      PROXY_BASE_URL: http://proxy:8080  # 代理管理接口
+      QUOTA_TOKEN: "quota-shared-secret"
+      SYNC_INTERVAL: "2"
+    ports:
+      - "8081:8081"                      # 配额控制网页
+    volumes:
+      - quota-data:/data
+    # 与 proxy 互相重试启动，无需 depends_on 排序
+    networks: [telemetry]
+
   proxy:
     build: ./proxy
     container_name: telemetry-proxy
@@ -29,10 +45,12 @@ services:
       RECEIVER_B_HOST: receiver-b
       RECEIVER_B_PORT: "9001"
       DB_PATH: /data/proxy.db            # 目标接收器持久化（重启保留）
+      QUOTA_SERVICE_URL: http://quota:8081   # 配额控制服务；启动须先拉到保存版
+      QUOTA_TOKEN: "quota-shared-secret"
       # UPSTREAM_PORT_COOLDOWN: "30"     # 上游端口冷却，须大于最大回包延迟
     ports:
       - "9000:9000/udp"                  # 遥测终端发往这里
-      - "8080:8080"                      # 操作网页
+      - "8080:8080"                      # 代理操作网页
     volumes:
       - proxy-data:/data
     depends_on:
@@ -45,3 +63,4 @@ networks:
 
 volumes:
   proxy-data:
+  quota-data:

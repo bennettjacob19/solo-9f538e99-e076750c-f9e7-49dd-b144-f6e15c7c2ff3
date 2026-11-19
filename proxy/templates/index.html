@@ -42,6 +42,9 @@
   <div class="card"><div class="label">接收器 B</div><div class="big" style="font-size:1rem">{{ receivers["B"] }}</div></div>
   <div class="card"><div class="label">会话空闲超时</div><div class="big" style="font-size:1rem">{{ idle_timeout }} s</div></div>
   <div class="card"><div class="label">终端发送地址（UDP）</div><div class="big" style="font-size:1rem">本机 :{{ udp_listen_port }}</div></div>
+  <div class="card"><div class="label">已应用配额 v<span id="q-version">{{ quota.version if quota.version is not none else "?" }}</span></div>
+    <div class="big" style="font-size:1rem">全局 <span id="q-global">{{ quota.global }}</span> / 单来源 <span id="q-per">{{ quota.per_source }}</span></div>
+    <div class="hint">活动会话 <b id="q-active">{{ quota.active_sessions }}</b>，来源数 <span id="q-sources">{{ quota.source_count }}</span></div></div>
 </div>
 
 {% with messages = get_flashed_messages(with_categories=true) %}
@@ -62,12 +65,17 @@
   <form method="post" action="{{ url_for('test') }}">
     <div class="row">
       <label>报文 <input name="payload" value="PING" size="24"></label>
+      <label>来源 IP
+        <select name="client_ip" style="padding:5px 8px;border-radius:6px;border:1px solid #8888">
+          {% for ip in test_source_ips %}<option value="{{ ip }}">{{ ip }}</option>{% endfor %}
+        </select>
+      </label>
       <label>回包延迟(秒) <input name="delay" type="number" min="0" step="0.5" value="0" style="width:70px"></label>
       <label>等待超时(秒) <input name="wait" type="number" min="1" max="60" value="10" style="width:70px"></label>
-      <label>固定客户端端口 <input name="client_port" type="number" min="1" max="65535" placeholder="留空=随机" style="width:110px"></label>
+      <label>固定源端口 <input name="client_port" type="number" min="1" max="65535" placeholder="留空=随机" style="width:110px"></label>
       <button type="submit">发送</button>
     </div>
-    <p class="hint">不填端口时每次试传都用新端口（总是新会话）。填同一端口可观察：空闲 {{ idle_timeout }} 秒内复用旧会话（仍走旧接收器）；超时后同端口重建会话，也收不到旧会话迟到的回包。</p>
+    <p class="hint">来源 IP 可选 127.0.0.1～127.0.0.3，配合固定/随机源端口可模拟异常终端更换源端口。不填端口时每次试传都用新端口（总是新会话）。填同一端口可观察：空闲 {{ idle_timeout }} 秒内复用旧会话（仍走旧接收器）；超时后同端口重建会话，也收不到旧会话迟到的回包。</p>
   </form>
   {% if last_test %}
   <div class="card" style="margin-top:10px">
@@ -86,8 +94,8 @@
 <section>
   <h2>活动会话 <span class="hint">（每 2 秒自动刷新）</span></h2>
   <table>
-    <thead><tr><th>ID</th><th>客户端</th><th>固定接收器</th><th>上游端口</th><th>状态</th><th>空闲(s)</th><th>存活(s)</th></tr></thead>
-    <tbody id="sessions"><tr><td colspan="7">加载中…</td></tr></tbody>
+    <thead><tr><th>ID</th><th>客户端</th><th>来源 IP</th><th>固定接收器</th><th>上游端口</th><th>状态</th><th>空闲(s)</th><th>存活(s)</th></tr></thead>
+    <tbody id="sessions"><tr><td colspan="8">加载中…</td></tr></tbody>
   </table>
 </section>
 
@@ -105,11 +113,18 @@ async function refresh() {
   try {
     const s = await (await fetch('/api/state')).json();
     document.getElementById('target').textContent = s.target;
+    if (s.quota) {
+      document.getElementById('q-version').textContent = s.quota.version ?? '?';
+      document.getElementById('q-global').textContent = s.quota.global ?? '?';
+      document.getElementById('q-per').textContent = s.quota.per_source ?? '?';
+      document.getElementById('q-active').textContent = s.quota.active_sessions;
+      document.getElementById('q-sources').textContent = s.quota.source_count;
+    }
     const ss = s.sessions.map(x =>
-      `<tr><td>${x.id}</td><td>${esc(x.client)}</td><td><b>${esc(x.receiver)}</b></td>` +
+      `<tr><td>${x.id}</td><td>${esc(x.client)}</td><td>${esc(x.source_ip)}</td><td><b>${esc(x.receiver)}</b></td>` +
       `<td>${x.upstream_port ?? ''}</td><td>${esc(x.state)}</td><td>${x.idle}</td><td>${x.age}</td></tr>`);
     document.getElementById('sessions').innerHTML =
-      ss.join('') || '<tr><td colspan="7">（无活动会话）</td></tr>';
+      ss.join('') || '<tr><td colspan="8">（无活动会话）</td></tr>';
     const ms = s.messages.map(m =>
       `<tr><td>${m.id}</td><td>${esc(m.ts)}</td><td>${esc(m.client)}</td><td>${m.session_id || ''}</td>` +
       `<td>${esc(m.direction)}</td><td>${esc(m.receiver)}</td><td>${esc(m.payload)}</td><td>${esc(m.note)}</td></tr>`);
