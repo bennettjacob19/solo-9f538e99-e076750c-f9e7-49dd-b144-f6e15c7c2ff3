@@ -17,7 +17,7 @@
   section { border: 1px solid #8885; border-radius: 8px; padding: 12px 16px; margin: 14px 0; }
   button { padding: 6px 14px; border-radius: 6px; border: 1px solid #8888; cursor: pointer; }
   button:disabled { opacity: .4; cursor: default; }
-  input { padding: 5px 8px; border-radius: 6px; border: 1px solid #8888; }
+  input, select { padding: 5px 8px; border-radius: 6px; border: 1px solid #8888; }
   .flash { padding: 8px 12px; border-radius: 6px; margin: 8px 0; }
   .flash.ok { background: #2e7d3233; border: 1px solid #2e7d32; }
   .flash.error { background: #c6282833; border: 1px solid #c62828; }
@@ -30,6 +30,10 @@
   form .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
   label { font-size: .85rem; }
   code { background: #8882; padding: 1px 5px; border-radius: 4px; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .8rem;
+           border: 1px solid #8888; }
+  .badge.wait { background: #f9a82533; border-color: #f9a825; }
+  .badge.ready { background: #2e7d3233; border-color: #2e7d32; }
 </style>
 </head>
 <body>
@@ -43,6 +47,31 @@
   <div class="card"><div class="label">会话空闲超时</div><div class="big" style="font-size:1rem">{{ idle_timeout }} s</div></div>
   <div class="card"><div class="label">终端发送地址（UDP）</div><div class="big" style="font-size:1rem">本机 :{{ udp_listen_port }}</div></div>
 </div>
+
+<section>
+  <h2>配额（代理已应用版）</h2>
+  <div class="cards" style="margin:4px 0">
+    <div class="card"><div class="label">已应用版本</div>
+      <div class="big" id="quota-version" style="font-size:1.3rem">
+        {% if quota.version %}v{{ quota.version }}{% else %}—{% endif %}</div></div>
+    <div class="card"><div class="label">全局活动会话上限</div>
+      <div class="big" id="quota-global" style="font-size:1.3rem">{{ quota.global_cap }}</div>
+      <div class="hint" id="global-usage"></div></div>
+    <div class="card"><div class="label">单来源 IP 上限</div>
+      <div class="big" id="quota-per-ip" style="font-size:1.3rem">{{ quota.per_ip_cap }}</div></div>
+    <div class="card"><div class="label">启动取版状态</div>
+      <div style="margin-top:6px"><span class="badge {{ 'ready' if quota.ready else 'wait' }}" id="quota-ready">
+        {{ '已取得保存版' if quota.ready else '等待控制服务…' }}</span></div>
+      <div class="hint" id="quota-applied-at">{{ quota.applied_at }}</div></div>
+  </div>
+  <table style="margin-top:8px">
+    <thead><tr><th>来源 IP</th><th>会话数（含建连中）</th></tr></thead>
+    <tbody id="usage"><tr><td colspan="2">加载中…</td></tr></tbody>
+  </table>
+  <p class="hint">配额由独立的配额控制服务保存并推送，代理仅按已应用版接纳：首包即计数（含建连中）；
+    单来源满额拒绝；全局满额时腾退占多席来源中最久未活动的会话，各来源仅一席则拒绝。
+    收紧上限不踢旧会话，用量回落前不接纳新会话。</p>
+</section>
 
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
@@ -62,17 +91,23 @@
   <form method="post" action="{{ url_for('test') }}">
     <div class="row">
       <label>报文 <input name="payload" value="PING" size="24"></label>
+      <label>源 IP
+        <select name="source_ip">
+          {% for ip in test_source_ips %}<option value="{{ ip }}">{{ ip }}</option>{% endfor %}
+        </select></label>
       <label>回包延迟(秒) <input name="delay" type="number" min="0" step="0.5" value="0" style="width:70px"></label>
       <label>等待超时(秒) <input name="wait" type="number" min="1" max="60" value="10" style="width:70px"></label>
-      <label>固定客户端端口 <input name="client_port" type="number" min="1" max="65535" placeholder="留空=随机" style="width:110px"></label>
+      <label>固定源端口 <input name="client_port" type="number" min="1" max="65535" placeholder="留空=随机" style="width:110px"></label>
       <button type="submit">发送</button>
     </div>
-    <p class="hint">不填端口时每次试传都用新端口（总是新会话）。填同一端口可观察：空闲 {{ idle_timeout }} 秒内复用旧会话（仍走旧接收器）；超时后同端口重建会话，也收不到旧会话迟到的回包。</p>
+    <p class="hint">源 IP 可在 127.0.0.1～127.0.0.3 间选择，配合单来源 IP 上限可验证同来源限额；
+      不填源端口时每次试传都用新端口（总是新会话）。填同一端口可观察：空闲 {{ idle_timeout }} 秒内复用旧会话（仍走旧接收器）；
+      超时后同端口重建会话，也收不到旧会话迟到的回包。被配额拒绝时结果区会显示拒绝原因。</p>
   </form>
   {% if last_test %}
   <div class="card" style="margin-top:10px">
     <div class="label">最近一次试传（{{ last_test.time }}）</div>
-    <div>客户端 <code>{{ last_test.client }}</code> → 实际去向接收器
+    <div>客户端 <code>{{ last_test.client }}</code>（源 IP {{ last_test.source_ip }}）→ 实际去向接收器
       <b>{{ last_test.receiver or "?" }}</b>，报文 <code>{{ last_test.payload }}</code></div>
     {% if last_test.ok %}
       <div class="result-ok">收到回包：<code>{{ last_test.reply }}</code>（RTT {{ last_test.rtt }}s）</div>
@@ -86,13 +121,13 @@
 <section>
   <h2>活动会话 <span class="hint">（每 2 秒自动刷新）</span></h2>
   <table>
-    <thead><tr><th>ID</th><th>客户端</th><th>固定接收器</th><th>上游端口</th><th>状态</th><th>空闲(s)</th><th>存活(s)</th></tr></thead>
-    <tbody id="sessions"><tr><td colspan="7">加载中…</td></tr></tbody>
+    <thead><tr><th>ID</th><th>客户端</th><th>来源 IP</th><th>固定接收器</th><th>上游端口</th><th>状态</th><th>空闲(s)</th><th>存活(s)</th></tr></thead>
+    <tbody id="sessions"><tr><td colspan="8">加载中…</td></tr></tbody>
   </table>
 </section>
 
 <section>
-  <h2>报文日志（实际去向与回包） <span class="hint">（最近 100 条，每 2 秒自动刷新）</span></h2>
+  <h2>报文日志（实际去向、回包与配额事件） <span class="hint">（最近 100 条，每 2 秒自动刷新）</span></h2>
   <table>
     <thead><tr><th>#</th><th>时间</th><th>客户端</th><th>会话</th><th>方向</th><th>接收器</th><th>报文内容</th><th>备注</th></tr></thead>
     <tbody id="messages"><tr><td colspan="8">加载中…</td></tr></tbody>
@@ -105,11 +140,26 @@ async function refresh() {
   try {
     const s = await (await fetch('/api/state')).json();
     document.getElementById('target').textContent = s.target;
+    const q = s.quota;
+    document.getElementById('quota-version').textContent = q.version ? ('v' + q.version) : '—';
+    document.getElementById('quota-global').textContent = q.global_cap;
+    document.getElementById('quota-per-ip').textContent = q.per_ip_cap;
+    document.getElementById('global-usage').textContent =
+      `当前 ${s.sessions.length} / 上限 ${q.global_cap}`;
+    const rb = document.getElementById('quota-ready');
+    rb.className = 'badge ' + (q.ready ? 'ready' : 'wait');
+    rb.textContent = q.ready ? '已取得保存版' : '等待控制服务…';
+    document.getElementById('quota-applied-at').textContent = q.applied_at || '';
+    const us = (s.usage || []).map(u =>
+      `<tr><td>${esc(u.ip)}</td><td>${u.sessions} / ${q.per_ip_cap}</td></tr>`);
+    document.getElementById('usage').innerHTML =
+      us.join('') || '<tr><td colspan="2">（无活动会话）</td></tr>';
     const ss = s.sessions.map(x =>
-      `<tr><td>${x.id}</td><td>${esc(x.client)}</td><td><b>${esc(x.receiver)}</b></td>` +
-      `<td>${x.upstream_port ?? ''}</td><td>${esc(x.state)}</td><td>${x.idle}</td><td>${x.age}</td></tr>`);
+      `<tr><td>${x.id}</td><td>${esc(x.client)}</td><td>${esc(x.source_ip)}</td>` +
+      `<td><b>${esc(x.receiver)}</b></td><td>${x.upstream_port ?? ''}</td>` +
+      `<td>${esc(x.state)}</td><td>${x.idle}</td><td>${x.age}</td></tr>`);
     document.getElementById('sessions').innerHTML =
-      ss.join('') || '<tr><td colspan="7">（无活动会话）</td></tr>';
+      ss.join('') || '<tr><td colspan="8">（无活动会话）</td></tr>';
     const ms = s.messages.map(m =>
       `<tr><td>${m.id}</td><td>${esc(m.ts)}</td><td>${esc(m.client)}</td><td>${m.session_id || ''}</td>` +
       `<td>${esc(m.direction)}</td><td>${esc(m.receiver)}</td><td>${esc(m.payload)}</td><td>${esc(m.note)}</td></tr>`);

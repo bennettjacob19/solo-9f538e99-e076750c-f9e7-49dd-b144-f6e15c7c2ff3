@@ -17,6 +17,22 @@ services:
       REPLY_DELAY: "0"
     networks: [telemetry]
 
+  control:
+    build: ./control
+    container_name: telemetry-control
+    environment:
+      HTTP_PORT: "8081"
+      DB_PATH: /data/control.db           # 保存版/已应用版持久化（重启保留，待应用版续推）
+      PROXY_CONTROL_URL: http://proxy:8080
+      APPLY_INTERVAL: "1"                 # 联系代理失败时的重试间隔（秒）
+    ports:
+      - "8081:8081"                       # 配额控制网页
+    volumes:
+      - control-data:/data
+    depends_on:
+      - proxy
+    networks: [telemetry]
+
   proxy:
     build: ./proxy
     container_name: telemetry-proxy
@@ -29,10 +45,11 @@ services:
       RECEIVER_B_HOST: receiver-b
       RECEIVER_B_PORT: "9001"
       DB_PATH: /data/proxy.db            # 目标接收器持久化（重启保留）
+      QUOTA_CONTROL_URL: http://control:8081   # 留空则不启用配额对接（内置默认配额）
       # UPSTREAM_PORT_COOLDOWN: "30"     # 上游端口冷却，须大于最大回包延迟
     ports:
       - "9000:9000/udp"                  # 遥测终端发往这里
-      - "8080:8080"                      # 操作网页
+      - "8080:8080"                      # 代理操作网页
     volumes:
       - proxy-data:/data
     depends_on:
@@ -45,3 +62,4 @@ networks:
 
 volumes:
   proxy-data:
+  control-data:
